@@ -1,0 +1,6 @@
+*.8xv
+*.bin
+*.lab
+*.rom
+ce-rom-patcher*
+symbol_table.inc
