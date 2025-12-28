@@ -1,0 +1,2 @@
+# Avoid these files as being detected as Pascal
+*.inc linguist-generated
