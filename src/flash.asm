@@ -1,75 +1,92 @@
 ; custom flash routines
 
-flash_write_command:
+flash_write_command_no_wait:
 	ld de, $E00800
 	ld bc, $10
 	ldir
-	; push hl
-	; ld hl, $E00824
-.wait:
-	; bit 0, (hl)
-	; jr z, .wait
-	; set 0, (hl)
-	; pop hl
 	ret
 
-flash_erase:
-	ld (.cmd+18), a
-	ld hl, .cmd
-	ld a, 3
-.write:
-	call flash_write_command
-	dec a
-	jr nz, .write
+flash_command_wait:
+	push hl
+	ld hl, $E00824
 .wait:
+	bit 0, (hl)
+	jr z, .wait
+	set 0, (hl)
+	pop hl
 	ret
+
+flash_write_command:
+	call flash_write_command_no_wait
+	jr flash_command_wait
+
+flash_write_enable:
+	ld hl, .cmd
+	jr flash_write_command
 .cmd:
 	dd $00000000, $01000000, $00000000, $06000002
+
+flash_erase:
+	call flash_write_enable
+	ld (.cmd+2), a
+	ld hl, .cmd
+	call flash_write_command
+	jp flash_write_command
+.cmd:
 	dd $000000FF, $01000003, $00000000, $D8000002
 	dd $00000000, $01000000, $00000000, $05000004
 
 flash_write:
-	push de
 	push hl
-	push bc
-	; check if input is larger than a page
-	ld hl, $100
+	ld (.cmd), de
+	; retrieve the bytes remaining in the starting page
+	ld a, d
+	and a, $0F
+	ld d, a
+	ld h, d
+	ld l, 0
+	inc h
+	or a
+	sbc.sis hl, de
+	; check if input is smaller than the remaining page
+	push hl
 	or a
 	sbc hl, bc
-	ret pe
+	pop hl
 	jp m, .next
-	ld (.cmd+24), bc
+.smaller:
+	ld h, b
+	ld l, c
 .next:
-	ld (.cmd+16), de
+	ld.sis ((.cmd+8)-ti.ramStart), hl
+	ld a, l
+	; precalculate the next destination
+	ex de, hl
+	ld hl, (.cmd)
+	add hl, de
+	push hl
+	push bc
+	call flash_write_enable
 	ld hl, .cmd
-	ld a, 2
-.write:
-	call flash_write_command
-	dec a
-	jr nz, .write
-	inc d ; reset z
-	ld de, $E00900
+	call flash_write_command_no_wait
 	pop bc
 	pop hl
+	ex (sp), hl
+	ld de, $E00900
 .write_flash:
-	jr z, .end
-	inc a
 	ldi
 	dec de
-	jp pe, .write_flash
+	jp po, .end
+	dec a
+	jr nz, .write_flash
+	pop de
+	call flash_command_wait
+	jr flash_write
 .end:
 	pop de
-	ret nz
-	; ret if bc = 0
-	ld a, b
-	or c
-	ret z
-	; go to next destination and restart
-	inc d
-	jr flash_write
+	jp flash_command_wait
 .cmd:
-	dd $00000000, $01000000, $00000000, $06000002
-	dd $00FFFFFF, $01000003, $00000100, $32000042
+	dd $00FFFFFF, $01000003, $0000FFFF, $32000042
 
 flash_size:
 	ld hl, .cmd
