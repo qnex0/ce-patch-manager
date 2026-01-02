@@ -13,6 +13,7 @@ swap_size := $10000
 virtual at ti.pixelShadow
 	ram_store::
 	ram_code_area rb lengthof ram_code
+	privileged_sector rb 1
 	curr_addr rb 3
 	curr_block := $-1
 	temp_block rb 3
@@ -181,7 +182,7 @@ entries
 
 	; move the bottom of the app region
 	entry
-		replace 3, [-] <LoadDEIndFlash_patch>
+		replace 2, [-] <LoadDEIndFlash_patch>
 		from jump, ti.LoadDEIndFlash
 	end entry
 	; make ArcChk skip sectors 3B-3F when calculating size
@@ -194,7 +195,7 @@ entries
 		replace 0, [$FE, $3B] <NextFlashPage_patch>
 		from jump, ti.NextFlashPage
 	end entry
-	; make PrevFlashPage jump over sectors 3B-3F
+	; ; make PrevFlashPage jump over sectors 3B-3F
 	entry
 		replace 0, [$BB, $28, $01] <PrevFlashPage_patch>
 		from jump, ti.PrevFlashPage
@@ -205,7 +206,7 @@ entries
 		from jump, ti.MarkOSValid
 	end entry
 
-	; not related to the patch. signature check disabling related stuff.
+	; ; not related to the patch. signature check disabling related stuff.
 	entry
 		replace 0, [-] [$C9]
 		from jump, ti.FindAppHeaderSubField
@@ -216,7 +217,15 @@ entries
 	end entry
 end entries
 
-;;;;;
+determine_patch_size:
+	call flash_size
+	cp a, $C0
+	jr nz, .next
+	ld a, 1 ; select first replacement
+	ret
+.next:
+	ld a, 0 ; select second replacement
+	ret
 
 update_patch_code:
 	ret
@@ -268,7 +277,7 @@ patch_block:
 	sbc hl, bc ; check if the location is zeroed
 	ld b, (ix+4) ; get number of sequences to match for the location
 	lea ix, ix+5
-	jr z, .skip_location ; if the location is zeroed, skip
+	jr z, .skip ; if the location is zeroed, skip
 	inc e
 	jr nz, .start
 	inc hl
@@ -294,63 +303,73 @@ patch_block:
 	cp a, $FF
 	jr z, .loop_start ; we are not currently patching a block
 	; check if we are currently patching the specified block
-	cp a, e	
-	jr z, .loop_start
+	cp a, e
+	jr z, .loop_continue
 .end_curr_block:
 	pop af
-.skip_location:
+.skip:
 	ld c, 3
 	mlt bc
 	add ix, bc
 	jr patch_block
 .loop_start:
-	pop af
-	ld de, 0
-	ld (ix-$04), de ; mark location as processed
-.loop:
-	; calculate search size ($10000 - start of search)
+	; initial copy into swap mem
 	push bc
 	push hl
+	ld h, 0
+	ld l, 0
+	ld (curr_addr), hl
+	ld de, swap_mem
+	ld bc, swap_size
+	ldir
+	pop hl
+	pop bc
+.loop_continue:
+	pop af
+	; make search address relative to swap mem (swap_mem + 00XXXX)
+	push bc
 	ld b, h
 	ld c, l
+	ld hl, swap_mem
+	add hl, bc
+	; mark location as processed
+	ld de, 0
+	ld (ix-4), de
+	; calculate first search size ($10000 - start of search)
+	push hl
 	ld hl, $10000
 	sbc hl, bc
 	push hl
 	pop bc
 	pop hl
-	push hl
-	ld de, (ix) ; get the sequence to match against
+.loop:
+	; get the sequence to match against
+	ld de, (ix)
 	push af
 	call find
-	jr nz, .next
+	jr z, .found
+	ld a, $FF
+	ld (curr_block), a
+	pop af
+	pop bc
+	jr .skip
+.found:
+	pop af
+	push bc
+	push af
 	ld a, (curr_block)
 	inc a
-	push hl
 	jr nz, .calculate_offsets
-	; initial copy into swap mem
-	ld h, 0
-	ld l, 0
-	ld (curr_addr), hl
+	; block begin
+	; push hl
 	ld a, (curr_block)
 	ld (iy), a
 	inc iy
 	call 0
 .callback := $-3
-	push de
-	ld de, swap_mem
-	ld bc, swap_size
-	ldir
-	pop de
 .calculate_offsets:
-	pop bc
-	ld hl, 0
-	; make replacement address relative to swap mem
-	ld h, b
-	ld l, c
-	ld bc, swap_mem
-	add hl, bc
-	; jump over the sequence data
 	ex de, hl
+	; jump over the sequence data
 	ld bc, 0
 	ld c, (hl)
 	add hl, bc
@@ -406,12 +425,14 @@ patch_block:
 	inc a
 .next:
 	pop af
-	pop hl
 	pop bc
+	ex hl, de
 	lea ix, ix+3 ; go to next sequence
-	; djnz .loop
-	dec b
+	ex (sp), hl
+	dec h
+	ex (sp), hl
 	jp nz, .loop
+	pop bc
 	jp patch_block
 
 find:
@@ -475,18 +496,24 @@ storage_start:
 ram_code_storage db ram_code
 
 init_patch_code:
-	; make patch code privileged
-	ld a, ram_code_area shr 16
+	; make the universe privileged
+	in0 a, ($1F)
+	ld (privileged_sector), a
+	ld a, $FF
+	out0 ($1F), a
 
-	ld de, ram_code_area + (lengthof ram_code)
-	out0 ($25), a
-	out0 ($24), d
-	out0 ($23), e
+	; make patch code privileged
+	; ld a, ram_code_area shr 16
+
+	; ld de, ram_code_area + (lengthof ram_code) + 1
+	; out0 ($25), a
+	; out0 ($24), d
+	; out0 ($23), e
 
 	ld de, ram_code_area
-	out0 ($22), a
-	out0 ($21), d
-	out0 ($20), e
+	; out0 ($22), a
+	; out0 ($21), d
+	; out0 ($20), e
 
 	; copy code into ram
 	ld hl, ram_code_storage
@@ -503,10 +530,12 @@ init_patch_code:
 	ret
 
 clear_patch_code:
-	; reset upper byte of privileged memory for the OS
-	ld a, $D1
-	out0 ($25), a
-	out0 ($22), a
+	; ; reset upper byte of privileged memory for the OS
+	; ld a, $D1
+	; out0 ($25), a
+	; out0 ($22), a
+	ld a, (privileged_sector)
+	out0 ($1F), a
 	; zero out region used by patch code
 	ld hl, $E40000
 	ld de, ram_code_area
@@ -514,9 +543,19 @@ clear_patch_code:
 	ldir
 	ret
 
-boot_code_hook:
-	push hl, de, bc, ix, iy
+macro hook_begin
+	push hl, de, bc, ix, iy, af
 	call init_patch_code
+end macro
+
+hook_exit:
+	call clear_patch_code
+	pop af, iy, ix, bc, de, hl
+	ret
+
+boot_code_hook:
+	hook_begin
+	pop af
 	call ti.KeypadScan
 	push af
 	cp a, $05
@@ -527,19 +566,29 @@ boot_code_hook:
 .exit:
 	; ONLY THE PATCH MANAGER SHALL TOUCH THE BOOT SECTORS!
 	call flash_temp_lock_boot_sectors
-	call clear_patch_code
-	pop af, iy, ix, bc, de, hl
+	jr hook_exit
+
+os_install_patch_progress:
+	push hl
+	ld hl, $1204
+	call ti.PutSpinner
+	pop hl
 	ret
 
 os_install_hook:
-	; call init_patch_code
-	ld hl, .text
+	ld hl, $FFFFFF
+	hook_begin
+	ld hl, os_install_patch_progress
+	ld (patch_block.callback), hl
 	ld a, 1
 	ld (ti.curCol), a
+	ld hl, .text
 	call ti.boot.PutS
-	ld hl, $FFFFFF
-.exit:
-	ret
+	call determine_patch_size
+	; patch OS sectors
+	res 1, a
+	call apply_patches
+	jr hook_exit
 .text:
 	db "Patching OS...   ", 0
 
@@ -553,6 +602,7 @@ NextFlashPage_patch:
 	jr nz, .end
 	dec a
 .end:
+	inc a
 	ret
 
 PrevFlashPage_patch:
