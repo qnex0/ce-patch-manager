@@ -1,9 +1,12 @@
 CC := clang
 FASMG := fasmg
 
+LOCK_BOOT ?= 1
+
 CFLAGS := -Wall -Wextra
+FFLAGS := -i LOCK_BOOT=$(LOCK_BOOT)
 ifdef WITH_SYMBOLS
-FFLAGS := -i 'include "symbol_table.inc"'
+FFLAGS += -i 'include "symbol_table.inc"'
 endif
 
 SRC := installer.c

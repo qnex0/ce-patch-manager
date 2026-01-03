@@ -8,6 +8,7 @@ virtual ram_store
 	sections_cache rb 1
 	text_fg rb 1
 	text_bg rb 1
+	temp_str rb lengthof patch_text + 1
 	ram_store_end:
 end virtual
 
@@ -15,55 +16,76 @@ text_height := 18
 text_width := 12
 text_vert_step := 8
 
+disp_buff := ti.vRam
+disp_width := 320
+disp_height := 240
+disp_size := disp_width*disp_height
+
 namespace color
 	white 	:= 255
 	black 	:= 0
 	green 	:= 1
 	red  	:= 2
-	cyan  	:= 3
+	blue  	:= 3
 	orange 	:= 4
-	finish	:= 5
+	gray 	:= 5
+	count	:= 6
 end namespace
 
 colors:
 	dw $0000
-	dw $0643
-	dw $D800
-	dw $069B
-	dw $FA40
+	dw $8260
+	dw $7C00
+	dw $001F
+	dw $FE24
+	dw $6318
+
+patch_text := 'Patching (00)'
+unpatch_text := 'Unpatching (00)'
 
 namespace strs
+	hex_table		db '0123456789ABCDEF'
 	title 			db 'Patch manager', 0
-	controls 		db 'ENTER: Patch, MODE: Boot', 0
+	control_del		db 'DEL: Unpatch, ', 0
+	controls_enter 	db 'ENTER: Patch, ', 0
+	controls 		db 'MODE: Boot', 0
 	version_num		db 'v', version, 0
-	yes 			db 'Yes', 0
-	no 				db 'No', 0
-	namespace warnings
-		reset 		db 'Long press Rst+Alpha', 0
-	end namespace
+	yes 			db 'Installed', 0
+	yes_err 		db 'Error: reinstall', 0
+	
+	no 				db 'Not installed', 0
+	reset 		db 'Long press Rst+Alpha', 0
 	namespace file
 		none 		db 'No file found', 0
 		invalid		db 'Invalid format', 0
 		found 		db 'Press 2nd', 0
 	end namespace
-	namespace flash_status
-		unlocked 	db 'Unlocked', 0
-		temp 		db 'Temp lock', 0
-		otp 		db 'OTP lock', 0
-	end namespace
+	flash:
+		db 'Unlocked', 0
+		db 'Temp lock', 0
+		db 'OTP lock', 0
 	namespace patched
 		yes 		db 'Patched', 0
 		no 			db 'Not patched', 0
+		progress	db patch_text, 0
 	end namespace
 end namespace
 
+namespace layout_bit
+	size		:= 0
+	status		:= 1
+	boot		:= 2
+	update		:= 3
+	os			:= 4
+	errs		:= 7
+end namespace
 
 layout:
     section 'Flash size',		layout_get_size
 	section 'Status',			layout_get_status
 	section 'Boot sectors',	 	layout_get_boot_sectors 
 	section 'Update',			layout_check_update
-	section 'OS installed', 	layout_check_os
+	section 'OS', 				layout_check_os
     section '', 0
 
 ; boot_PutS was lacking features that I wanted so I made my own
@@ -72,13 +94,19 @@ layout:
 disp_init:
 	ld hl, colors
 	ld de, ti.mpLcdPalette
-	ld bc, color.finish*2
+	ld bc, color.count*2
 	ldir
 	ld de, $FFFF
 	ld (ti.mpLcdPalette+(2*$FF)), de
 	ld a, $27
 	ld (ti.mpLcdCtrl), a
-	ld bc, $0102
+	ret
+
+disp_clear:
+	ld hl, disp_buff + disp_size
+	ld de, disp_buff
+	ld bc, disp_size
+	ldir
 	ret
 
 disp_deinit:
@@ -105,8 +133,8 @@ disp_c:
 	ld e, text_vert_step
 	mlt de
 	ld c, e
-	ld hl, ti.vRam
-	ld de, 320
+	ld hl, disp_buff
+	ld de, disp_width
 .y_pos:
 	add hl, de
 	dec c
@@ -147,7 +175,7 @@ disp_c:
 .end_row:
 	pop ix
 	ld a, c
-	ld bc, 320-(text_width+2)
+	ld bc, disp_width-(text_width+2)
 	ex de, hl
 	add hl, bc
 	ex de, hl
@@ -155,6 +183,7 @@ disp_c:
 	dec c
 	jr nz, .start_row
     pop bc
+	inc b
 	ret
 
 disp_s:
@@ -164,11 +193,10 @@ disp_s:
 	inc hl
 	push hl
 	call disp_c
-	inc b
 	pop hl
 	jr disp_s
 
-set_color:
+disp_color:
 	ld (text_bg), a
 	cp a, $FF
 	ld a, $FF
@@ -179,12 +207,19 @@ set_color:
 	ld (text_fg), a
 	ret
 
-new_line:
+disp_line:
 	inc c
 	inc c
 	inc c
 	ld b, 1
 	ret
+
+next_str:
+	ld a, (hl)
+	or a
+	inc hl
+	ret z
+	jr next_str
 
 check_os:
 	ld hl, ($020100)
@@ -194,38 +229,101 @@ check_os:
 	ld hl, ($02001A) ; os version
 	ret
 
+set_err:
+	ld a, (sections_cache)
+	set layout_bit.errs, a
+	ld (sections_cache), a
+	ret
+
+get_err:
+	ld a, (sections_cache)
+	bit layout_bit.errs, a
+	ret
+
 layout_check_os:
 	call check_os
 	jr nz, .not
+	call is_patched
+	jr z, .yes
+	call get_os_substitutions
+	jr z, .yes
+	call set_err
+	ld a, color.red
+	ld hl, strs.yes_err
+	jr .end
+.yes:
 	ld a, color.white
 	ld hl, strs.yes
 	jr .end
 .not:
-	ld a, color.red
+	ld a, color.white
 	ld hl, strs.no
 .end:
 	ret
 
 layout_get_size:
 	call flash_size
+	cp a, $40
+	jr nz, .end
+	; call set_err
+.end:
 	ld a, color.white
 	ret
 
+layout_get_boot_sectors:
+	; when a = 2; s = 0, z = 0 (otp lock)
+	; when a = 1; s = 0, z = 1 (temp lock)
+	; when a = 0; s = 1, z = 0 (unlocked)
+	call flash_get_lock_status
+	ld hl, strs.flash
+	dec a
+	jp p, .temp
+	ld a, color.green
+	ret
+.temp:
+	call next_str
+	ld a, color.orange
+.otp:
+	ld a, color.red
+	ret nz
+	jr next_str
+
 layout_get_status:
+	ld a, (curr_block)
+	cp a, $FF
+	jr z, .not_patching
+	ld hl, strs.patched.progress
+	ld de, temp_str
+	push de
+	ld bc, lengthof patch_text
+	ldir
+	dec de
+	dec de
+	ld hl, strs.hex_table
+	ld c, a
+	add hl, bc
+	ld a, (hl)
+	ld (de), a
+	pop hl
+	ld a, color.blue
+	ret
+.not_patching:
+	call is_patched
+	jr nz, .patched
+	ld a, color.red
+	ld hl, strs.patched.no
+	jr .end
+.patched:
 	ld a, color.green
 	ld hl, strs.patched.yes
-	ret
-
-layout_get_boot_sectors:
-	call flash_get_lock_status
-	ld a, color.orange
-	ld hl, strs.flash_status.temp
+.end:
 	ret
 
 layout_check_update:
 	call check_os
 	jr nz, .not_found
 	; manually load archive variables into symTable for ChkFindSym to work before boot
+	; TODO: manually search the archive, this is really ugly.
 	ld hl, ti.symTable
 	ld (ti.progPtr), hl
 	ld (ti.pTemp), hl
@@ -258,7 +356,7 @@ layout_check_update:
 	jr nz, .invalid
 
 	; do stuff with hl
-	ld a, color.cyan
+	ld a, color.blue
 	ld hl, strs.file.found
 	ret
 .invalid:
@@ -269,19 +367,28 @@ layout_check_update:
 	ld a, color.white
 	ld hl, strs.file.none
 	ret
-.load_routine:
-	db 4, $FD, $CB, $26, $A6
-.header:
-	db lengthof header, header
-.file_name:
-	db ti.AppVarObj, name, 0
+.load_routine db 4, $FD, $CB, $26, $A6
+.header db lengthof header, header
+.file_name db ti.AppVarObj, name, 0
 
 process_layout:
     ld hl, layout
 	ld bc, $010A
 	ld a, color.white
-	call set_color
+	call disp_color
+	ld d, 1
 .loop:
+	ld a, (sections_cache)
+	cpl
+	and a, d
+	jr nz, .cont
+	call next_str
+	jr .next
+.cont:
+	ld a, (sections_cache)
+	or a, d
+	ld (sections_cache), a
+	push de
     call disp_s
 	inc hl
 	push hl
@@ -296,124 +403,122 @@ process_layout:
     jp (hl)
 .ret:
     pop bc
-	call set_color
+	call disp_color
 	call disp_s
 	ld a, color.white
-	call set_color
+	call disp_color
 	pop hl
+	pop de
+.next:
     inc hl
     inc hl
     inc hl
+	rl d
     ld a, (hl)
     or a
     ret z
-	call new_line
+	call disp_line
     jr .loop
 .sep:
     db ': ', 0
 
-set_status_text:
-	; push bc
-	; push hl
-	; ld bc, $0600
-	; call new_line
-	; call new_line
-	; dec c
-	; call disp_s
-	; pop hl
-	; pop bc
-	ret
-
-delay_200ms:
-	push bc
-	ld b, 20
-.delay:
-	call ti.Delay10ms
-	djnz .delay
-	pop bc
-	ret
-
-blink_status_text:
-	push bc
-	ld bc, $0640
-.blink:
-	ld a, (text_bg)
-	bit 0, b
-	jr nz, .sub 
-	add a, c
-	jr .set
-.sub:
-	sub a, c
-.set:
-	ld (text_bg), a
-	call set_status_text
-	call delay_200ms
-	djnz .blink
-	pop bc
-	ret
-
-patch_block_callback:
-	; a = curr sector
-	ret
-
-key_enter:
-	ld hl, patch_block_callback
-	ld (patch_block.callback), hl
-	ld a, 0
-	set 0, a ; select first replacement
-	set 1, a ; patch boot sectors
-	call apply_patches
-	res 1, a ; patch OS sectors
-	call apply_patches
-	ret
-
-key_2nd:
-	ret
-
 draw_header:
 	ld a, color.black
-	call set_color
+	call disp_color
 	; draw title
 	ld hl, strs.title
 	call disp_s
-	call new_line
+	call disp_line
 	; draw version num
 	ld a, color.white
-    call set_color
+    call disp_color
 	ld hl, strs.version_num
 	call disp_s
 	; draw line separator
-	call new_line
+	call disp_line
 	dec c
 .draw_line:
     ld a, '-'
     call disp_c
-    inc b
     ld a, 20
     cp b
 	ret z
 	jr .draw_line
 
-access_patch_manager:
-	call disp_init
+draw_manager:
+	xor a
+	ld (sections_cache), a
+	ld bc, $0102
 	call draw_header
 	; draw sections
     call process_layout
-	call new_line
+	call disp_line
 	inc c
 	; draw controls
-	ld hl, strs.controls
 	ld a, color.black
-	call set_color
+	call disp_color
+	call get_err
+	jr nz, .disp
+	call is_patched
+	ld hl, strs.controls_enter
+	jr z, .disp
+	ld hl, strs.control_del
+.disp:
 	call disp_s
+	call is_patched
+	ld hl, strs.controls
+	jp disp_s
+	; controls_enter
 
-	; call process_layout
-	; ld hl, strs.flash_status
-	; call set_status_text
+patch_block_callback:
+	push ix, af, hl, de, bc
+	ld a, (sections_cache)
+	res layout_bit.status, a
+	ld (sections_cache), a
+	call process_layout
+	pop bc, de, hl, af, ix
+	ret
+
+key_enter:
+	call is_patched
+	ret nz
+	call get_err
+	ret nz
+	ld hl, patch_block_callback
+	ld (patch_block.callback), hl
+	call determine_patch_size
+	push af
+	call patch_boot
+	pop af
+	call check_os
+	jr nz, .end 
+	call patch_os
+.end:
+	call disp_clear
+	jp draw_manager
+
+key_del:
+	call is_patched
+	ret z
+	call get_err
+	ret nz
+	call remove_patches
+	call disp_clear
+	jp draw_manager
+	ret
+
+key_2nd:
+	; call get_err
+	; ret nz
+	ret
+
+access_patch_manager:
+	call disp_init
+	call draw_manager
 .wait:
 	call ti.KeypadScan
 	cp a, $06
-	jr z, .next
+	jr z, .second
 	cp a, $01
 	jr z, .enter
 	jr .wait
@@ -423,15 +528,20 @@ access_patch_manager:
 	jr nz, .wait
 	call key_enter
 	jr .wait
-.next:
+.second:
 	ld a, l
 	cp a, $20
-	jr nz, .exit
+	jr nz, .del
 	call key_2nd
+	jr .wait
+.del:
+	cp a, $80
+	jr nz, .exit
+	call key_del
 	jr .wait
 .exit:
 	cp a, $40
 	jr nz, .wait
-	call disp_deinit
-	call ti.boot.ClearVRAM
-	jp z, boot_code_hook.exit
+	; call disp_deinit
+	; call disp_clear
+	jp 0

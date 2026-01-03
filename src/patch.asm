@@ -9,6 +9,7 @@ version := '1.0'
 format ti archived executable appvar name
 
 swap_size := $10000
+substitutions_size := $FF
 
 virtual at ti.pixelShadow
 	ram_store::
@@ -18,7 +19,7 @@ virtual at ti.pixelShadow
 	curr_block := $-1
 	temp_block rb 3
 	swap_mem rb swap_size
-	substitutions rb $FF
+	substitutions rb substitutions_size
 end virtual
 
 virtual at 0 as 'bin'
@@ -206,7 +207,7 @@ entries
 		from jump, ti.MarkOSValid
 	end entry
 
-	; ; not related to the patch. signature check disabling related stuff.
+	; not related to the patch. signature check disabling related stuff.
 	entry
 		replace 0, [-] [$C9]
 		from jump, ti.FindAppHeaderSubField
@@ -217,20 +218,73 @@ entries
 	end entry
 end entries
 
+is_patched:
+	ld a, (patched_size)
+	cp a, $FF
+	ret
+
+get_os_substitutions:
+	ld de, $4200
+	call ti.FindFirstCertField
+	ret
+
 determine_patch_size:
+	call is_patched
+	jr nz, .compare
 	call flash_size
+.compare:
 	cp a, $C0
 	jr nz, .next
-	ld a, 1 ; select first replacement
+	ld a, 1
 	ret
 .next:
 	ld a, 0 ; select second replacement
 	ret
 
+patch_boot:
+	set 1, a
+	call apply_patches
+	bit 0, a
+	jr nz, .next
+	ld a, $80
+	jr .set
+.next:
+	ld a, $C0
+.set:
+	ld hl, .data+2
+	ld (hl), a
+	dec hl
+	dec hl
+	ld de, patched_size
+	ld bc, 3
+	call flash_write
+	ld hl, substitutions
+	ld de, patch_map
+	ld bc, substitutions_size
+	call flash_write
+	ret
+.data rb 3
+
+patch_os:
+	res 1, a
+	call apply_patches
+	call ti.GetCertificateEnd
+	ex de, hl
+	ld hl, .header
+	ld bc, 3
+	call flash_write
+	ld hl, substitutions
+	ld bc, substitutions_size
+	call flash_write
+	ret	
+.header db $42, $0D, substitutions_size ; cert field with id 420
+
 update_patch_code:
 	ret
 
 remove_patches:
+	call get_os_substitutions
+	ret nz
 	ret
 
 apply_patches:
@@ -245,8 +299,13 @@ apply_patches:
 	call patch_block
 	ld a, (curr_block)
 	call write_swap_to_flash
+	ld de, $FFFFFF
+	ld (iy), de
+	lea iy, iy+3
 	jr nz, .loop
 .end:
+	ld a, $FF
+	ld (iy), a
 	pop af
 	ret
 
@@ -318,7 +377,6 @@ patch_block:
 	push hl
 	ld h, 0
 	ld l, 0
-	ld (curr_addr), hl
 	ld de, swap_mem
 	ld bc, swap_size
 	ldir
@@ -348,8 +406,6 @@ patch_block:
 	push af
 	call find
 	jr z, .found
-	ld a, $FF
-	ld (curr_block), a
 	pop af
 	pop bc
 	jr .skip
@@ -358,11 +414,11 @@ patch_block:
 	push bc
 	push af
 	ld a, (curr_block)
-	inc a
+	cp a, $FF
 	jr nz, .calculate_offsets
 	; block begin
-	; push hl
-	ld a, (curr_block)
+	ld a, (temp_block+2)
+	ld (curr_block), a
 	ld (iy), a
 	inc iy
 	call 0
@@ -492,6 +548,8 @@ load ram_code: $ - $$ from $$
 end virtual
 
 virtual at $020000 - lengthof xip_code
+patch_map := $-(substitutions_size+3)
+patched_size := $-3
 storage_start:
 ram_code_storage db ram_code
 
@@ -520,6 +578,9 @@ init_patch_code:
 	ld bc, lengthof ram_code
 	ldir
 
+	ld a, $FF
+	ld (curr_block), a
+
 	; enable flash unlock sequence
 	in0 a, ($06)
 	set 2, a
@@ -543,30 +604,23 @@ clear_patch_code:
 	ldir
 	ret
 
-macro hook_begin
-	push hl, de, bc, ix, iy, af
-	call init_patch_code
-end macro
-
-hook_exit:
-	call clear_patch_code
-	pop af, iy, ix, bc, de, hl
-	ret
-
 boot_code_hook:
-	hook_begin
-	pop af
+	call init_patch_code
 	call ti.KeypadScan
-	push af
+	push hl, bc, de, af
 	cp a, $05
 	jr nz, .exit
 	ld a, l
 	cp a, $80
 	jp z, access_patch_manager
 .exit:
+	if LOCK_BOOT = 1
 	; ONLY THE PATCH MANAGER SHALL TOUCH THE BOOT SECTORS!
 	call flash_temp_lock_boot_sectors
-	jr hook_exit
+	end if
+	call clear_patch_code
+	pop af, de, bc, hl
+	ret
 
 os_install_patch_progress:
 	push hl
@@ -577,7 +631,8 @@ os_install_patch_progress:
 
 os_install_hook:
 	ld hl, $FFFFFF
-	hook_begin
+	push hl, de, bc, ix, iy, af
+	call init_patch_code
 	ld hl, os_install_patch_progress
 	ld (patch_block.callback), hl
 	ld a, 1
@@ -585,10 +640,10 @@ os_install_hook:
 	ld hl, .text
 	call ti.boot.PutS
 	call determine_patch_size
-	; patch OS sectors
-	res 1, a
-	call apply_patches
-	jr hook_exit
+	call patch_os
+	call clear_patch_code
+	pop af, iy, ix, bc, de, hl
+	ret
 .text:
 	db "Patching OS...   ", 0
 
@@ -630,7 +685,9 @@ LoadDEIndFlash_patch:
 	or a
 	sbc hl, bc
 	jr nz, .end
-	ld hl, $800000
+	ld hl, (patched_size)
+	ld h, 0
+	ld l, 0
 	ex (sp), hl
 	ld a, 6
 .loop:

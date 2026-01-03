@@ -121,9 +121,12 @@ flash_size:
 .cmd:
 	dd $00000000, $01000000, $00000003, $9F000000
 
+if LOCK_BOOT = 1
 flash_temp_lock_boot_sectors:
 	; the lock in question
 	ret
+end if
 
 flash_get_lock_status:
+	ld a, 0
 	ret
