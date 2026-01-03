@@ -223,9 +223,29 @@ is_patched:
 	cp a, $FF
 	ret
 
+calculate_checksum:
+	ld b, substitutions_size - 1
+	xor a
+.add:
+	ld de, (hl)
+	inc hl
+	add a, e
+	djnz .add
+	ret
+
 get_os_substitutions:
 	ld de, $4200
 	call ti.FindFirstCertField
+	ret nz
+	inc hl
+	inc hl
+	inc hl
+	push hl
+	call calculate_checksum
+	ld b, a
+	ld a, (hl)
+	cp a, b
+	pop hl
 	ret
 
 determine_patch_size:
@@ -274,6 +294,12 @@ patch_os:
 	ld bc, 3
 	call flash_write
 	ld hl, substitutions
+	push hl
+	push de
+	call calculate_checksum
+	ld (hl), a
+	pop de
+	pop hl
 	ld bc, substitutions_size
 	call flash_write
 	ret	
