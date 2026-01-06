@@ -40,21 +40,21 @@ colors:
 	dw $FE24
 	dw $6318
 
-patch_text := 'Patching (00)'
-unpatch_text := 'Unpatching (00)'
+patch_text := 'Writing (00)'
 
 namespace strs
-	hex_table		db '0123456789ABCDEF'
+	hex_table		db '0123456789AB'
 	title 			db 'Patch manager', 0
+	version_num		db 'v', version, 0
+
 	control_del		db 'DEL: Unpatch, ', 0
 	controls_enter 	db 'ENTER: Patch, ', 0
 	controls 		db 'MODE: Boot', 0
-	version_num		db 'v', version, 0
+
 	yes 			db 'Installed', 0
 	yes_err 		db 'Error: reinstall', 0
-	
 	no 				db 'Not installed', 0
-	reset 		db 'Long press Rst+Alpha', 0
+
 	namespace file
 		none 		db 'No file found', 0
 		invalid		db 'Invalid format', 0
@@ -63,7 +63,6 @@ namespace strs
 	flash:
 		db 'Unlocked', 0
 		db 'Temp lock', 0
-		db 'OTP lock', 0
 	namespace patched
 		yes 		db 'Patched', 0
 		no 			db 'Not patched', 0
@@ -114,21 +113,7 @@ disp_deinit:
 	ld (ti.mpLcdCtrl), a
 	ret
 
-disp_c:
-    push bc
-    ; retrieve font offset for char
-	call ti.boot.GetLFontPtr
-	ld d, a
-	ld e, 28
-	mlt de
-	add hl, de
-    ; copy char data into padded memory for the top and bottom lines
-	push bc
-	ld de, text_mem+4
-	ld bc, 28
-	ldir
-	pop bc
-	; calculate start point, b = x, c = y
+disp_resolve_cords:
 	ld d, c
 	ld e, text_vert_step
 	mlt de
@@ -144,6 +129,24 @@ disp_c:
 	ld e, text_width
 	mlt de
 	add hl, de
+	ret
+
+disp_c:
+    push bc
+    ; retrieve font offset for char
+	call ti.boot.GetLFontPtr
+	ld d, a
+	ld e, 28
+	mlt de
+	add hl, de
+    ; copy char data into padded memory for the top and bottom lines
+	push bc
+	ld de, text_mem+4
+	ld bc, 28
+	ldir
+	pop bc
+	; calculate start point, b = x, c = y
+	call disp_resolve_cords
 .start:
 	ex de, hl
 	ld ix, text_mem
@@ -214,20 +217,42 @@ disp_line:
 	ld b, 1
 	ret
 
+disp_line_clear:
+	push bc
+	call disp_resolve_cords
+	ex de, hl
+	inc de
+	inc de
+	; get distance from edge
+	ld a, $1A
+	sub a, b
+	ld b, a
+	ld c, text_width
+	mlt bc
+	inc bc
+	ld a, text_height
+.draw_row:
+	push de
+	push bc
+	ld hl, ti.vRam + 320*240 ; read FF
+	dec bc
+	ldir
+	pop bc
+	pop hl
+	ld de, disp_width
+	add hl, de
+	ex hl, de
+	dec a
+	jr nz, .draw_row
+	pop bc
+	ret
+
 next_str:
 	ld a, (hl)
 	or a
 	inc hl
 	ret z
 	jr next_str
-
-check_os:
-	ld hl, ($020100)
-	ld bc, $A55A
-	or a
-	sbc.sil hl, bc
-	ld hl, ($02001A) ; os version
-	ret
 
 set_err:
 	ld a, (sections_cache)
@@ -271,22 +296,15 @@ layout_get_size:
 	ret
 
 layout_get_boot_sectors:
-	; when a = 2; s = 0, z = 0 (otp lock)
-	; when a = 1; s = 0, z = 1 (temp lock)
-	; when a = 0; s = 1, z = 0 (unlocked)
 	call flash_get_lock_status
 	ld hl, strs.flash
-	dec a
-	jp p, .temp
+	jr nz, .locked
 	ld a, color.green
 	ret
-.temp:
+.locked:
 	call next_str
 	ld a, color.orange
-.otp:
-	ld a, color.red
-	ret nz
-	jr next_str
+	ret
 
 layout_get_status:
 	ld a, (curr_block)
@@ -405,6 +423,7 @@ process_layout:
     pop bc
 	call disp_color
 	call disp_s
+	call disp_line_clear
 	ld a, color.white
 	call disp_color
 	pop hl
@@ -465,18 +484,16 @@ draw_manager:
 	ld hl, strs.control_del
 .disp:
 	call disp_s
-	call is_patched
 	ld hl, strs.controls
-	jp disp_s
+	call disp_s
+	jp disp_line_clear
 	; controls_enter
 
 patch_block_callback:
-	push ix, af, hl, de, bc
 	ld a, (sections_cache)
 	res layout_bit.status, a
 	ld (sections_cache), a
 	call process_layout
-	pop bc, de, hl, af, ix
 	ret
 
 key_enter:
@@ -484,17 +501,10 @@ key_enter:
 	ret nz
 	call get_err
 	ret nz
-	ld hl, patch_block_callback
-	ld (patch_block.callback), hl
+	call recreate_patch_table
 	call determine_patch_size
-	push af
 	call patch_boot
-	pop af
-	call check_os
-	jr nz, .end 
 	call patch_os
-.end:
-	call disp_clear
 	jp draw_manager
 
 key_del:
@@ -502,10 +512,11 @@ key_del:
 	ret z
 	call get_err
 	ret nz
-	call remove_patches
-	call disp_clear
+	; unpatch OS first, so that the device can still be considered
+	; patched if an error occurs (this way an error can be displayed)
+	call unpatch_os
+	call unpatch_boot
 	jp draw_manager
-	ret
 
 key_2nd:
 	; call get_err
@@ -515,6 +526,8 @@ key_2nd:
 access_patch_manager:
 	call disp_init
 	call draw_manager
+	ld hl, patch_block_callback
+	ld (write_swap_to_flash.callback), hl
 .wait:
 	call ti.KeypadScan
 	cp a, $06

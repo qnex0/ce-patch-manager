@@ -1,5 +1,14 @@
 ; custom flash routines
 
+namespace status
+	read1 := $05
+	read2 := $35
+	read3 := $15
+	write1 := $01
+	write2 := $31
+	write3 := $11
+end namespace
+
 flash_write_command_no_wait:
 	ld de, $E00800
 	ld bc, $10
@@ -90,7 +99,7 @@ flash_write:
 
 flash_size:
 	ld hl, .cmd
-	call flash_write_command
+	call flash_write_command_no_wait
 	ld hl, $E00818
 .wait:
 	bit 1, (hl)
@@ -99,6 +108,7 @@ flash_size:
 .read:
 	ld a, ($E00900)
 	djnz .read
+	call flash_command_wait
 .end:
 	sub a, $16
 	ld bc, 0
@@ -121,12 +131,44 @@ flash_size:
 .cmd:
 	dd $00000000, $01000000, $00000003, $9F000000
 
+flash_read_status_register:
+	ld (.cmd+15), a
+	ld hl, .cmd
+	call flash_write_command_no_wait
+	ld hl, $E00818
+.wait:
+	bit 1, (hl)
+	jr z, .wait
+.read:
+	ld a, ($E00900)
+	jp flash_command_wait
+.cmd:
+	dd $00000000, $01000000, $0000001, $FF000000
+
+flash_write_status_register:
+	ld (.cmd+15), a
+	ld hl, .cmd
+	ret
+	; jp flash_write_command
+.cmd:
+	dd $00000000, $01000000, $0000001, $FF000000
+
 if LOCK_BOOT = 1
 flash_temp_lock_boot_sectors:
-	; the lock in question
-	ret
+	; lock 000000h – 01FFFFh
+	; SEC = 0, TB = 1, BP2 = 0, BP1 = 1, BP0 = 0
+	ld bc, (status.write1 shl 8) or $28
+	call flash_write_status_register
+	; set WPS = 0
+	ld bc, (status.write3 shl 8) or $60
+	call flash_write_status_register
+	; enable the lock! (set SRL = 1)
+	ld bc, (status.write2 shl 8) or $03
+	jp flash_write_status_register
 end if
 
 flash_get_lock_status:
-	ld a, 0
+	ld a, status.read2
+	call flash_read_status_register
+	bit 0, a ; SRL
 	ret

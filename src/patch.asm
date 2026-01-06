@@ -18,6 +18,7 @@ virtual at ti.pixelShadow
 	curr_addr rb 3
 	curr_block := $-1
 	temp_block rb 3
+	boot_subs_removed rb 1
 	swap_mem rb swap_size
 	substitutions rb substitutions_size
 end virtual
@@ -181,6 +182,12 @@ entries
 
 	; routine trampolining
 
+	; erase the expanded sectors when clearing archive from the OS
+	entry
+		replace 0, [$FE, $3B, $30] [$FE] [$FE] ; first match
+		replace 0, [$FD, $CB] <EraseArchive_patch>
+		from absolute, $025000
+	end entry
 	; move the bottom of the app region
 	entry
 		replace 2, [-] <LoadDEIndFlash_patch>
@@ -196,16 +203,24 @@ entries
 		replace 0, [$FE, $3B] <NextFlashPage_patch>
 		from jump, ti.NextFlashPage
 	end entry
-	; ; make PrevFlashPage jump over sectors 3B-3F
+	; make PrevFlashPage jump over sectors 3B-3F
 	entry
 		replace 0, [$BB, $28, $01] <PrevFlashPage_patch>
 		from jump, ti.PrevFlashPage
 	end entry
+	; if the input is larger than 9999K, change units and continue
+	entry
+		replace 0, [$11, $00, $00, $00] <Draw32_patch>
+		replace 0, [$21, $0E, $06, $D0] <Draw32_patch2>
+		from jump, ti.Draw32
+	end entry
 
+	;;
 	entry
 		replace 0, [-] <os_install_hook>
 		from jump, ti.MarkOSValid
 	end entry
+	;;
 
 	; not related to the patch. signature check disabling related stuff.
 	entry
@@ -217,35 +232,19 @@ entries
 		from absolute, $006000
 	end entry
 end entries
+patches_end:
+
+check_os:
+	ld hl, ($020100)
+	ld bc, $A55A
+	or a
+	sbc.sil hl, bc
+	ld hl, ($02001A) ; os version
+	ret
 
 is_patched:
 	ld a, (patched_size)
 	cp a, $FF
-	ret
-
-calculate_checksum:
-	ld b, substitutions_size - 1
-	xor a
-.add:
-	ld de, (hl)
-	inc hl
-	add a, e
-	djnz .add
-	ret
-
-get_os_substitutions:
-	ld de, $4200
-	call ti.FindFirstCertField
-	ret nz
-	inc hl
-	inc hl
-	inc hl
-	push hl
-	call calculate_checksum
-	ld b, a
-	ld a, (hl)
-	cp a, b
-	pop hl
 	ret
 
 determine_patch_size:
@@ -258,10 +257,11 @@ determine_patch_size:
 	ld a, 1
 	ret
 .next:
-	ld a, 0 ; select second replacement
+	ld a, 1 ; select second replacement
 	ret
 
 patch_boot:
+	push af
 	set 1, a
 	call apply_patches
 	bit 0, a
@@ -282,10 +282,60 @@ patch_boot:
 	ld de, patch_map
 	ld bc, substitutions_size
 	call flash_write
+	pop af
 	ret
 .data rb 3
 
+calculate_checksum:
+	ld b, substitutions_size - 1
+	xor a
+.add:
+	ld c, (hl)
+	inc hl
+	add a, c
+	djnz .add
+	ret
+
+get_os_substitutions_raw:
+	ld de, $4200
+	jp ti.FindFirstCertField
+
+get_os_substitutions:
+	call get_os_substitutions_raw
+	ret nz
+	inc hl
+	inc hl
+	inc hl
+	push hl
+	call calculate_checksum
+	ld b, a
+	ld a, (hl)
+	cp a, b
+	pop hl
+	ret
+
+remove_os_substitutions:
+	call get_os_substitutions_raw
+	ret nz
+	ld bc, 1
+	ld (hl), b
+	ex de, hl
+	ld hl, $E40000 ; fetch a 0
+	call flash_write
+	jp ti.CleanupCertificate
+
+patch_os_skip_check:
+	push af
+	jr patch_os.start
+
 patch_os:
+	push af
+	call check_os
+	jr nz, .end
+.start:
+	call remove_os_substitutions
+	pop af
+	push af
 	res 1, a
 	call apply_patches
 	call ti.GetCertificateEnd
@@ -302,16 +352,86 @@ patch_os:
 	pop hl
 	ld bc, substitutions_size
 	call flash_write
+.end:
+	pop af
 	ret	
 .header db $42, $0D, substitutions_size ; cert field with id 420
 
+unpatch_boot_callback:
+	dec a
+	jr nz, .call
+	; remove the header from storage
+	header_in_swap = swap_mem + (header_start and $FFFF)
+	ld hl, header_in_swap
+	ld (hl), $FF
+	ld de, header_in_swap + 1
+	ld bc, (storage_start - header_start) - 1
+	ldir
+	inc a
+	ld (boot_subs_removed), a
+.call:
+	call 0
+.callback := $-3
+	ret
+
+unpatch_boot:
+	xor a
+	ld (boot_subs_removed), a
+	ld hl, (write_swap_to_flash.callback)
+	push hl
+	ld (unpatch_boot_callback.callback), hl
+	ld de, unpatch_boot_callback
+	ld (write_swap_to_flash.callback), de
+	ld hl, patch_map
+	call remove_patches
+	pop hl
+	ld (write_swap_to_flash.callback), hl
+	ld a, (boot_subs_removed)
+	or a
+	ret nz
+	; if sector 01 is never patched.
+	; ld hl, storage_start
+	; ld bc, $020000 - storage_start
+	jp update_patch_code
+
+unpatch_os:
+	call check_os
+	ret nz
+	call get_os_substitutions
+	ret nz
+	call remove_patches
+	jp remove_os_substitutions
+
 update_patch_code:
+
 	ret
 
 remove_patches:
-	call get_os_substitutions
-	ret nz
-	ret
+	ld a, (hl)
+	inc hl
+	cp a, $FF
+	ret z
+	push hl
+	ld (curr_block), a
+	ld hl, (curr_addr)
+	call write_swap
+	pop hl
+.next:
+	ld de, (hl)
+	ld c, 3
+	add hl, bc
+	ld c, (hl)
+	inc hl
+	inc c
+	jr z, .next_block
+	dec c
+	ldir
+	jr .next
+.next_block:
+	push hl
+	call write_swap_to_flash
+	pop hl
+	jr remove_patches
 
 apply_patches:
 	push af
@@ -327,7 +447,8 @@ apply_patches:
 	call write_swap_to_flash
 	ld de, $FFFFFF
 	ld (iy), de
-	lea iy, iy+3
+	ld (iy+3), d
+	lea iy, iy+4
 	jr nz, .loop
 .end:
 	ld a, $FF
@@ -339,7 +460,10 @@ write_swap_to_flash:
 	ld a, (curr_block)
 	cp a, $FF
 	ret z
-	push af
+	push af, hl, de, bc
+	call 0
+.callback := $-3
+	pop bc, de, hl, af
 	call flash_erase
 	ld hl, swap_mem
 	ld de, (curr_addr)
@@ -347,7 +471,12 @@ write_swap_to_flash:
 	call flash_write
 	ld a, $FF
 	ld (curr_block), a
-	pop af
+	ret
+
+write_swap:
+	ld de, swap_mem
+	ld bc, swap_size
+	ldir
 	ret
 
 patch_block:
@@ -403,9 +532,7 @@ patch_block:
 	push hl
 	ld h, 0
 	ld l, 0
-	ld de, swap_mem
-	ld bc, swap_size
-	ldir
+	call write_swap
 	pop hl
 	pop bc
 .loop_continue:
@@ -447,8 +574,6 @@ patch_block:
 	ld (curr_block), a
 	ld (iy), a
 	inc iy
-	call 0
-.callback := $-3
 .calculate_offsets:
 	ex de, hl
 	; jump over the sequence data
@@ -573,17 +698,29 @@ include 'flash.asm'
 load ram_code: $ - $$ from $$
 end virtual
 
-virtual at $020000 - lengthof xip_code
-patch_map := $-(substitutions_size+3)
-patched_size := $-3
+virtual at $020000 - (lengthof xip_code + (storage_start - header_start))
+header_start:
+patch_map rb substitutions_size
+patched_size rb 3
+
 storage_start:
 ram_code_storage db ram_code
+
+recreate_patch_table:
+	ld bc, patches_end - patches_start
+
+copy_to_ram:
+	ld hl, ram_code_storage
+	ld de, ram_code_area
+	ldir
+	ret
 
 init_patch_code:
 	; make the universe privileged
 	in0 a, ($1F)
 	ld (privileged_sector), a
-	ld a, $FF
+	; (the flash OS routines don't like when 1F is equal to FF. the only one we use is CleanupCertificate)
+	ld a, $FE
 	out0 ($1F), a
 
 	; make patch code privileged
@@ -594,15 +731,14 @@ init_patch_code:
 	; out0 ($24), d
 	; out0 ($23), e
 
-	ld de, ram_code_area
+	; ld de, ram_code_area
 	; out0 ($22), a
 	; out0 ($21), d
 	; out0 ($20), e
 
-	; copy code into ram
-	ld hl, ram_code_storage
+	; copy patch code
 	ld bc, lengthof ram_code
-	ldir
+	call copy_to_ram
 
 	ld a, $FF
 	ld (curr_block), a
@@ -612,8 +748,16 @@ init_patch_code:
 	set 2, a
 	out0 ($06), a
 
+	ld a, 4
 	; flash unlock sequence
-	ddq $57CB2838ED2839ED56ED7EEDF30018F3
+	di
+	jr $+2
+	di
+	rsmix
+	im 1
+	out0 ($28), a
+	in0 a, ($28)
+	bit 2, a
 	ret
 
 clear_patch_code:
@@ -649,29 +793,30 @@ boot_code_hook:
 	ret
 
 os_install_patch_progress:
-	push hl
-	ld hl, $1204
-	call ti.PutSpinner
-	pop hl
-	ret
+	ld hl, $1004
+	jp ti.PutSpinner
 
 os_install_hook:
 	ld hl, $FFFFFF
 	push hl, de, bc, ix, iy, af
 	call init_patch_code
 	ld hl, os_install_patch_progress
-	ld (patch_block.callback), hl
+	ld (write_swap_to_flash.callback), hl
 	ld a, 1
 	ld (ti.curCol), a
-	ld hl, .text
+	ld hl, .status
 	call ti.boot.PutS
+	ld hl, $0607
+	ld (ti.curRow), hl
+	ld hl, .details
+	call ti.boot.PutS	
 	call determine_patch_size
-	call patch_os
+	call patch_os_skip_check
 	call clear_patch_code
 	pop af, iy, ix, bc, de, hl
 	ret
-.text:
-	db "Patching OS...   ", 0
+.status: db 'Patching OS...    ', 0
+.details: db 'patching is  ', 0
 
 NextFlashPage_patch:
 	cp a, $3B
@@ -742,7 +887,69 @@ LoadDEIndFlash_patch:
 	pop af
 	ret
 
+EraseArchive_patch:
+	push af, bc, de
+	ld a, $40
+	ld bc, (patched_size+2)
+.loop:
+	push af
+	call ti.EraseFlashSector
+	pop af
+	inc a
+	cp a, c
+	jr nz, .loop
+	res 2, (iy+$25)
+	pop de, bc, af
+	ret
+
+Draw32_patch:
+	cp a, 7
+	jr nz, .exit
+	ld de, (ti.OP1-1) ; get input
+	ld a, (ti.OP1+2)
+	ld d, a
+	ld a, (ti.OP1+3)
+	ld e, a
+	push hl
+	; check if input will overflow
+	ld hl, 10000000
+	sbc hl, de
+	pop hl
+	ld a, 7
+	jr z, .set
+	jp p, .exit
+.set:
+	inc a
+.exit:
+	ld de, $000000
+	ret
+
+Draw32_patch2:
+	ld a, c
+	cp a, 8
+	jr nz, .exit
+	inc hl
+	inc hl
+	push de
+	ld de, (hl)
+	ld a, '.'
+	ld (hl), a
+	inc hl
+	ld (hl), e
+	inc hl
+	ld (hl), d
+	inc hl
+	ld a, 'M'
+	ld (hl), a
+	inc hl
+	xor a
+	ld (hl), a
+	pop de
+.exit:
+	ld hl, ti.OP3
+	ret
+
 include 'manager.asm'
 jp boot_code_hook
-load xip_code: $ - $$ from $$
+load xip_code: $ - storage_start from storage_start
 end virtual
