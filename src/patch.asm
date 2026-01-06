@@ -257,7 +257,7 @@ determine_patch_size:
 	ld a, 1
 	ret
 .next:
-	ld a, 1 ; select second replacement
+	ld a, 0
 	ret
 
 patch_boot:
@@ -389,9 +389,9 @@ unpatch_boot:
 	ld a, (boot_subs_removed)
 	or a
 	ret nz
-	; if sector 01 is never patched.
-	; ld hl, storage_start
-	; ld bc, $020000 - storage_start
+	; if sector 01 is never patched:
+	ld hl, storage_start
+	ld bc, lengthof xip_code
 	jp update_patch_code
 
 unpatch_os:
@@ -403,8 +403,9 @@ unpatch_os:
 	jp remove_os_substitutions
 
 update_patch_code:
-
-	ret
+	ld hl, $010000
+	call write_swap
+	jp write_swap_to_flash
 
 remove_patches:
 	ld a, (hl)
