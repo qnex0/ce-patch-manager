@@ -43,31 +43,23 @@ colors:
 patch_text := 'Writing (00)'
 
 namespace strs
-	hex_table		db '0123456789AB'
-	title 			db 'Patch manager', 0
-	version_num		db 'v', version, 0
-
-	control_del		db 'DEL: Unpatch, ', 0
-	controls_enter 	db 'ENTER: Patch, ', 0
-	controls 		db 'MODE: Boot', 0
-
-	yes 			db 'Installed', 0
-	yes_err 		db 'Error: reinstall', 0
-	no 				db 'Not installed', 0
-
-	namespace file
-		none 		db 'No file found', 0
-		invalid		db 'Invalid format', 0
-		found 		db 'Press 2nd', 0
-	end namespace
-	flash:
-		db 'Unlocked', 0
-		db 'Temp lock', 0
-	namespace patched
-		yes 		db 'Patched', 0
-		no 			db 'Not patched', 0
-		progress	db patch_text, 0
-	end namespace
+	hex_table			db '0123456789AB'
+	title 				db 'Patch manager', 0
+	version_num			db 'v', version, 0
+	controls_del		db 'DEL: Unpatch, ', 0
+	controls_enter 		db 'ENTER: Patch, ', 0
+	controls_mode 		db 'MODE: Boot', 0
+	os_installed 		db 'Installed', 0
+	os_error 			db 'Error: reinstall', 0
+	os_not_installed 	db 'Not installed', 0
+	update_not_found 	db 'No file found', 0 
+	update_invalid 		db 'Invalid format', 0
+	update_found 		db 'Press 2nd', 0
+	flash_unlocked 		db 'Unlocked', 0
+	flash_lock 			db 'Temp lock', 0
+	status_patched		db 'Patched', 0
+	status_not_patched 	db 'Not patched', 0
+	status_progress 	db patch_text, 0
 end namespace
 
 namespace layout_bit
@@ -274,15 +266,15 @@ layout_check_os:
 	jr z, .yes
 	call set_err
 	ld a, color.red
-	ld hl, strs.yes_err
+	ld hl, strs.os_error
 	jr .end
 .yes:
 	ld a, color.white
-	ld hl, strs.yes
+	ld hl, strs.os_installed
 	jr .end
 .not:
 	ld a, color.white
-	ld hl, strs.no
+	ld hl, strs.os_not_installed
 .end:
 	ret
 
@@ -290,19 +282,19 @@ layout_get_size:
 	call flash_size
 	cp a, $40
 	jr nz, .end
-	; call set_err
+	call set_err
 .end:
 	ld a, color.white
 	ret
 
 layout_get_boot_sectors:
 	call flash_get_lock_status
-	ld hl, strs.flash
+	ld hl, strs.flash_unlocked
 	jr nz, .locked
 	ld a, color.green
 	ret
 .locked:
-	call next_str
+	ld hl, strs.flash_lock
 	ld a, color.orange
 	ret
 
@@ -310,7 +302,7 @@ layout_get_status:
 	ld a, (curr_block)
 	cp a, $FF
 	jr z, .not_patching
-	ld hl, strs.patched.progress
+	ld hl, strs.status_progress
 	ld de, temp_str
 	push de
 	ld bc, lengthof patch_text
@@ -329,11 +321,11 @@ layout_get_status:
 	call is_patched
 	jr nz, .patched
 	ld a, color.red
-	ld hl, strs.patched.no
+	ld hl, strs.status_not_patched
 	jr .end
 .patched:
 	ld a, color.green
-	ld hl, strs.patched.yes
+	ld hl, strs.status_patched
 .end:
 	ret
 
@@ -375,15 +367,15 @@ layout_check_update:
 
 	; do stuff with hl
 	ld a, color.blue
-	ld hl, strs.file.found
+	ld hl, strs.update_found
 	ret
 .invalid:
 	ld a, color.red
-	ld hl, strs.file.invalid
+	ld hl, strs.update_invalid
 	ret
 .not_found:
 	ld a, color.white
-	ld hl, strs.file.none
+	ld hl, strs.update_not_found
 	ret
 .load_routine db 4, $FD, $CB, $26, $A6
 .header db lengthof header, header
@@ -481,10 +473,10 @@ draw_manager:
 	call is_patched
 	ld hl, strs.controls_enter
 	jr z, .disp
-	ld hl, strs.control_del
+	ld hl, strs.controls_del
 .disp:
 	call disp_s
-	ld hl, strs.controls
+	ld hl, strs.controls_mode
 	call disp_s
 	jp disp_line_clear
 	; controls_enter
