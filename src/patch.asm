@@ -13,14 +13,21 @@ substitutions_size := $FF
 
 virtual at ti.pixelShadow
 	ram_store::
+	; maintain offsets across updates
+	boot_into_manager rb 1
+	patch_on_boot rb 1
+	;;
 	ram_code_area rb lengthof ram_code
 	privileged_sector rb 1
 	curr_addr rb 3
 	curr_block := $-1
 	temp_block rb 3
-	boot_subs_removed rb 1
+	sector_01_processed rb 1
 	swap_mem rb swap_size
 	substitutions rb substitutions_size
+	update_addr rb 3
+	update_size rb 3
+	update_in_progress rb 1
 end virtual
 
 virtual at 0 as 'bin'
@@ -234,6 +241,8 @@ entries
 end entries
 patches_end:
 
+;; PUBLIC
+
 check_os:
 	ld hl, ($020100)
 	ld bc, $A55A
@@ -243,9 +252,57 @@ check_os:
 	ret
 
 is_patched:
-	ld a, (patched_size)
+	ld a, (patched_size_byte)
 	cp a, $FF
 	ret
+
+patch:
+	call is_patched
+	ret nz
+	call recreate_patch_table
+	call determine_patch_size
+	call patch_boot
+	jp patch_os
+
+unpatch:
+	call is_patched
+	ret z
+	; unpatch OS first, so that the device can still be considered
+	; patched if an error occurs (this way an error can be displayed)
+	call unpatch_os
+	jp unpatch_boot
+
+set_update:
+	ld (update_size), bc
+	ld (update_addr), hl
+	ret
+
+has_update_in_progress:
+	ld a, (update_in_progress)
+	or a
+	ret z
+has_update:
+	ld a, (update_addr+2)
+	or a
+	ret z
+	ld bc, (update_size)
+	ld hl, (update_addr)
+	ret
+
+apply_update:
+	ld a, 1
+	ld (update_in_progress), a
+	call is_patched
+	jr z, .not_patched
+	jp unpatch
+.not_patched:
+	call move_01_to_swap
+	call has_update
+	ret z
+	call update_patch_code_in_swap
+	jp write_swap_to_flash
+
+;;;;
 
 determine_patch_size:
 	call is_patched
@@ -357,26 +414,45 @@ patch_os:
 	ret	
 .header db $42, $0D, substitutions_size ; cert field with id 420
 
+clear_flash:
+	ld (hl), $FF
+	push hl
+	pop de
+	inc de
+	dec bc
+	ldir
+	ret
+
+remove_header_from_swap:
+	header_in_swap = swap_mem + (header_start and $FFFF)
+	ld hl, header_in_swap
+	ld bc, storage_start - header_start
+	jp clear_flash
+	ret
+
 unpatch_boot_callback:
 	dec a
 	jr nz, .call
+	call has_update_in_progress
+	jr z, .header
+	call update_patch_code_in_swap
+	jr .end
+.header:
 	; remove the header from storage
-	header_in_swap = swap_mem + (header_start and $FFFF)
-	ld hl, header_in_swap
-	ld (hl), $FF
-	ld de, header_in_swap + 1
-	ld bc, (storage_start - header_start) - 1
-	ldir
+	call remove_header_from_swap
+.end:
 	inc a
-	ld (boot_subs_removed), a
+	ld (sector_01_processed), a
 .call:
 	call 0
 .callback := $-3
 	ret
 
 unpatch_boot:
+	call is_patched
+	ret z
 	xor a
-	ld (boot_subs_removed), a
+	ld (sector_01_processed), a
 	ld hl, (write_swap_to_flash.callback)
 	push hl
 	ld (unpatch_boot_callback.callback), hl
@@ -386,13 +462,33 @@ unpatch_boot:
 	call remove_patches
 	pop hl
 	ld (write_swap_to_flash.callback), hl
-	ld a, (boot_subs_removed)
+	ld a, (sector_01_processed)
 	or a
 	ret nz
-	; if sector 01 is never patched:
-	ld hl, storage_start
-	ld bc, lengthof xip_code
-	jp update_patch_code
+	; if sector 01 is never patched, patch it here:
+	call move_01_to_swap
+	call remove_header_from_swap
+	jp write_swap_to_flash
+
+move_01_to_swap:
+	ld a, 1
+	ld (curr_block), a
+	ld hl, $010000
+	jp write_swap
+
+update_patch_code_in_swap:
+	push hl
+	push bc
+	ld hl, header_in_swap
+	ld bc, lengthof storage
+	call clear_flash
+	pop bc
+	ld hl, swap_mem + swap_size
+	sbc hl, bc
+	pop de
+	ex de, hl
+	ldir
+	ret
 
 unpatch_os:
 	call check_os
@@ -401,11 +497,6 @@ unpatch_os:
 	ret nz
 	call remove_patches
 	jp remove_os_substitutions
-
-update_patch_code:
-	ld hl, $010000
-	call write_swap
-	jp write_swap_to_flash
 
 remove_patches:
 	ld a, (hl)
@@ -696,6 +787,7 @@ find:
 	ret
 
 include 'flash.asm'
+include 'manager.asm'
 load ram_code: $ - $$ from $$
 end virtual
 
@@ -703,6 +795,7 @@ virtual at $020000 - (lengthof xip_code + (storage_start - header_start))
 header_start:
 patch_map rb substitutions_size
 patched_size rb 3
+patched_size_byte := $-1
 
 storage_start:
 ram_code_storage db ram_code
@@ -717,6 +810,8 @@ copy_to_ram:
 	ret
 
 init_patch_code:
+	call reset_patch_code.clear
+
 	; make the universe privileged
 	in0 a, ($1F)
 	ld (privileged_sector), a
@@ -761,35 +856,40 @@ init_patch_code:
 	bit 2, a
 	ret
 
-clear_patch_code:
+reset_patch_code:
 	; ; reset upper byte of privileged memory for the OS
 	; ld a, $D1
 	; out0 ($25), a
 	; out0 ($22), a
 	ld a, (privileged_sector)
 	out0 ($1F), a
+.clear:
 	; zero out region used by patch code
 	ld hl, $E40000
 	ld de, ram_code_area
-	ld bc, sizeof ram_store
+	ld bc, sizeof ram_store - 2
 	ldir
 	ret
 
 boot_code_hook:
 	call init_patch_code
+	ld a, (boot_into_manager)
+	or a
+	jp nz, access_patch_manager
 	call ti.KeypadScan
 	push hl, bc, de, af
 	cp a, $05
 	jr nz, .exit
 	ld a, l
 	cp a, $80
+.enter:
 	jp z, access_patch_manager
 .exit:
 	if LOCK_BOOT = 1
 	; ONLY THE PATCH MANAGER SHALL TOUCH THE BOOT SECTORS!
 	call flash_temp_lock_boot_sectors
 	end if
-	call clear_patch_code
+	call reset_patch_code
 	pop af, de, bc, hl
 	ret
 
@@ -813,7 +913,7 @@ os_install_hook:
 	call ti.boot.PutS	
 	call determine_patch_size
 	call patch_os_skip_check
-	call clear_patch_code
+	call reset_patch_code
 	pop af, iy, ix, bc, de, hl
 	ret
 .status: db 'Patching OS...    ', 0
@@ -891,7 +991,7 @@ LoadDEIndFlash_patch:
 EraseArchive_patch:
 	push af, bc, de
 	ld a, $40
-	ld bc, (patched_size+2)
+	ld bc, (patched_size_byte)
 .loop:
 	push af
 	call ti.EraseFlashSector
@@ -950,7 +1050,8 @@ Draw32_patch2:
 	ld hl, ti.OP3
 	ret
 
-include 'manager.asm'
+entry_point:
 jp boot_code_hook
 load xip_code: $ - storage_start from storage_start
+load storage: $ - $$ from $$
 end virtual

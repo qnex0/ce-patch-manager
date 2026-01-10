@@ -9,6 +9,9 @@ virtual ram_store
 	text_fg rb 1
 	text_bg rb 1
 	temp_str rb lengthof patch_text + 1
+	update_timer rb 1
+	update_start_addr rb 3
+	update_sym_addr rb 3
 	ram_store_end:
 end virtual
 
@@ -41,6 +44,7 @@ colors:
 	dw $6318
 
 patch_text := 'Writing (00)'
+update_text := 'Done! 0'
 
 namespace strs
 	hex_table			db '0123456789AB'
@@ -55,6 +59,7 @@ namespace strs
 	update_not_found 	db 'No file found', 0 
 	update_invalid 		db 'Invalid format', 0
 	update_found 		db 'Press 2nd', 0
+	update_finished		db update_text, 0
 	flash_unlocked 		db 'Unlocked', 0
 	flash_lock 			db 'Temp lock', 0
 	status_patched		db 'Patched', 0
@@ -305,8 +310,9 @@ layout_get_status:
 	ld hl, strs.status_progress
 	ld de, temp_str
 	push de
-	ld bc, lengthof patch_text
+	ld bc, lengthof patch_text + 1
 	ldir
+	dec de
 	dec de
 	dec de
 	ld hl, strs.hex_table
@@ -330,10 +336,31 @@ layout_get_status:
 	ret
 
 layout_check_update:
+	ld a, (update_timer)
+	or a
+	jr z, .check
+	push af
+	ld hl, strs.update_finished
+	ld de, temp_str
+	push de
+	ld bc, lengthof update_text + 1
+	ldir
+	dec de
+	dec de
+	ld c, '0'
+	add a, c
+	ld (de), a
+	pop hl
+	pop af
+	dec a
+	ld (update_timer), a
+	ld a, color.green
+	ret
+.check:
 	call check_os
-	jr nz, .not_found
+	jp nz, .not_found
 	; manually load archive variables into symTable for ChkFindSym to work before boot
-	; TODO: manually search the archive, this is really ugly.
+	; TODO: manually search the archive, this is really ugly. (would also be useful for the future multi-boot feature)
 	ld hl, ti.symTable
 	ld (ti.progPtr), hl
 	ld (ti.pTemp), hl
@@ -351,21 +378,39 @@ layout_check_update:
 	push bc
 	jp (hl)
 .search:
-	ld hl, .file_name
+	ld hl, .name
 	call ti.Mov9ToOP1
 	call ti.ChkFindSym
 	jr c, .not_found
+	ld (update_start_addr), de
+	ld (update_sym_addr), hl
 	ex de, hl
-	; skip VAT header and name
-	ld bc, 9 + 11
+	; VAT header
+	inc hl
+	; get appvar size
+	ld bc, 0
+	ld c, (hl)
+	inc hl
+	ld b, (hl)
+	push bc
+	; skip to header
+	ld bc, 18
 	add hl, bc
 	; check header
 	ld de, .header
 	ld bc, 3
 	call find
 	jr nz, .invalid
-
-	; do stuff with hl
+	; we have the bin loaded to hl
+	; skip past header + version
+	ld c, 6
+	add hl, bc
+	ex (sp), hl
+	ld bc, 23 ; subtract header size
+	sbc hl, bc
+	ex (sp), hl
+	pop bc
+	call set_update
 	ld a, color.blue
 	ld hl, strs.update_found
 	ret
@@ -377,9 +422,9 @@ layout_check_update:
 	ld a, color.white
 	ld hl, strs.update_not_found
 	ret
-.load_routine db 4, $FD, $CB, $26, $A6
+.name db ti.AppVarObj, name, 0
 .header db lengthof header, header
-.file_name db ti.AppVarObj, name, 0
+.load_routine db 4, $FD, $CB, $26, $A6
 
 process_layout:
     ld hl, layout
@@ -489,37 +534,66 @@ patch_block_callback:
 	ret
 
 key_enter:
-	call is_patched
-	ret nz
 	call get_err
 	ret nz
-	call recreate_patch_table
-	call determine_patch_size
-	call patch_boot
-	call patch_os
+	call patch
 	jp draw_manager
 
 key_del:
-	call is_patched
-	ret z
 	call get_err
 	ret nz
-	; unpatch OS first, so that the device can still be considered
-	; patched if an error occurs (this way an error can be displayed)
-	call unpatch_os
-	call unpatch_boot
+	call unpatch
 	jp draw_manager
 
 key_2nd:
-	; call get_err
-	; ret nz
-	ret
+	call get_err
+	ret nz
+	call has_update
+	ret z
+	call is_patched
+	push af
+	call apply_update
+	call process_layout
+	ld hl, (update_sym_addr)
+	ld de, (update_start_addr)
+	call ti.DelVarArc
+.countdown:
+	ld b, 3
+	ld a, b
+	ld (update_timer), a
+.loop:
+	ld a, (sections_cache)
+	res layout_bit.update, a
+	ld (sections_cache), a
+	push bc
+	call process_layout
+	ld b, 100
+.wait:
+	call ti.Delay10ms
+	djnz .wait
+	pop bc
+	djnz .loop
+	call disp_clear
+	pop af
+	ld a, 1
+	jr z, .end
+	ld (patch_on_boot), a
+.end:
+	ld (boot_into_manager), a
+	jp entry_point
 
 access_patch_manager:
 	call disp_init
 	call draw_manager
 	ld hl, patch_block_callback
 	ld (write_swap_to_flash.callback), hl
+	xor a
+	ld (boot_into_manager), a
+	ld a, (patch_on_boot)
+	or a
+	jr z, .wait
+	call patch
+	call draw_manager
 .wait:
 	call ti.KeypadScan
 	cp a, $06
