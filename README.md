@@ -1,4 +1,7 @@
 # Intro
+<img width="500" height="330" alt="image" src="https://github.com/user-attachments/assets/accb0d77-10de-448e-982b-51c8a3e38777" />
+
+
 The patch manager is a simple pre-boot environment that provides a central interface for managing and persisting ROM patches on the eZ80 series of TI calculators (that use a serial flash chip). The manager can be accessed by holding the `Alpha` key during a reset. Although applicable for applying general purpose patches, it was designed to apply patches related to the expansion of the TI-OS archive after upgrading the flash chip. It can increase the size of the archive from the original (approx 3.5MB) up to 11.5MB.
 
 # How to install
@@ -12,6 +15,8 @@ The ROM should be a total of 4MB in size when dumped. Grab the installer from th
 By default, the patch manager takes extra precautions when dealing with boot sectors. It applies a temporary lock to them that can only be cleared by a power cycle. You must hold the reset button for 4+ seconds (ensure that you are not connected to a power source), then hold `Alpha` and press `On`. If you explicitly disabled boot sector locking when [building](#building) the patch manager you can simply hold `Alpha` and short press the reset button.
 
 # Persistence
+<img width="405" height="397" alt="image" src="https://github.com/user-attachments/assets/3fe1030a-383e-469e-b1ba-4325b6deaf8e" />
+
 The patch manager installs a hook that is invoked every time an OS is installed where it then runs the patching routine. This ensures that the OS is always patched and in sync with the boot code patches.
 
 # Upgrades
@@ -19,7 +24,8 @@ The patch manager is designed for easy upgradeability in mind. Every release con
 
 You may also remove the patches at any time (while keeping the patch manager installed).
 
-# Photos
+# KhiCAS
+KhiCAS is the largest app on the, taking up about 100% of the original archive space. Because of this, clever hacks were used in order to even fit the program (such as stripping the relocation table.) This means that the custom app installer that KhiCAS uses will NOT work with this, since it's designed to unload at a hardcoded location without a relocation table. To use KhiCAS, you need to generatge 
 
 # How it works
 The patch manager:
