@@ -16,6 +16,22 @@ static const char bin[] = {
     #embed "UPDATE.bin"
 };
 
+void *match_mem(void *haystack, size_t haystack_len, void *needle, size_t needle_len)
+{
+    if (haystack == NULL) return NULL;
+    if (haystack_len == 0) return NULL;
+    if (needle == NULL) return NULL;
+    if (needle_len == 0) return NULL;
+
+    for (const char *h = haystack; haystack_len >= needle_len; ++h, --haystack_len) {
+        if (!memcmp(h, needle, needle_len)) {
+            return h;
+        }
+    }
+
+    return NULL;
+}
+
 static long file_size(FILE *file)
 {
     fseek(file, 0, SEEK_END);
@@ -129,7 +145,7 @@ int main(int argc, char *argv[])
     }
 
     uint8_t call_instr[] = {0xCD, jp_instr[1], jp_instr[2], jp_instr[3]};
-    uint8_t *match = memmem(rom.boot_code, sizeof(rom.boot_code), call_instr, 4);
+    uint8_t *match = match_mem(rom.boot_code, sizeof(rom.boot_code), call_instr, 4);
     if (!match) {
         fprintf(stderr, "could not find sequence\n");
         return EXIT_FAILURE;
