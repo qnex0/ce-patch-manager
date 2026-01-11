@@ -925,7 +925,10 @@ NextFlashPage_patch:
 	; skip to the expanded archive sectors
 	add a, 5
 .next:
-	cp a, $80
+	ld c, a
+	ld a, (patched_size_byte)
+	cp a, c
+	ld a, c
 	jr nz, .end
 	dec a
 .end:
