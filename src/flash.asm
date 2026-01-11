@@ -122,13 +122,12 @@ flash_size:
 	add hl, bc
 	ld a, (hl)
 	pop hl
-	ld a, $80
 	ret
 .sizes:
 	db "4MB ", 	0, $40
 	db "8MB ", 	0, $80
-	db "16MB", 	0, $80
-	db "32MB", 	0, $80
+	db "16MB", 	0, $C0
+	db "32MB", 	0, $C0
 .cmd:
 	dd $00000000, $01000000, $00000003, $9F000000
 
