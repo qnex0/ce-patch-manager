@@ -215,12 +215,12 @@ entries
 		replace 0, [$BB, $28, $01] <PrevFlashPage_patch>
 		from jump, ti.PrevFlashPage
 	end entry
-	; if the input is larger than 9999K, change units and continue
-	entry
-		replace 0, [$11, $00, $00, $00] <Draw32_patch>
-		replace 0, [$21, $0E, $06, $D0] <Draw32_patch2>
-		from jump, ti.Draw32
-	end entry
+	; ; if the input is larger than 9999K, change units and continue
+	; entry
+	; 	replace 0, [$11, $00, $00, $00] <Draw32_patch>
+	; 	replace 0, [$21, $0E, $06, $D0] <Draw32_patch2>
+	; 	from jump, ti.Draw32
+	; end entry
 
 	;;
 	entry
@@ -925,10 +925,10 @@ NextFlashPage_patch:
 	; skip to the expanded archive sectors
 	add a, 5
 .next:
-	ld c, a
-	ld a, (patched_size_byte)
-	cp a, c
-	ld a, c
+	push hl
+	ld hl, patched_size_byte
+	cp a, (hl)
+	pop hl
 	jr nz, .end
 	dec a
 .end:
@@ -1006,52 +1006,52 @@ EraseArchive_patch:
 	pop de, bc, af
 	ret
 
-Draw32_patch:
-	cp a, 7
-	jr nz, .exit
-	ld de, (ti.OP1-1) ; get input
-	ld a, (ti.OP1+2)
-	ld d, a
-	ld a, (ti.OP1+3)
-	ld e, a
-	push hl
-	; check if input will overflow
-	ld hl, 10000000
-	sbc hl, de
-	pop hl
-	ld a, 7
-	jr z, .set
-	jp p, .exit
-.set:
-	inc a
-.exit:
-	ld de, $000000
-	ret
+; Draw32_patch:
+; 	cp a, 7
+; 	jr nz, .exit
+; 	ld de, (ti.OP1-1) ; get input
+; 	ld a, (ti.OP1+2)
+; 	ld d, a
+; 	ld a, (ti.OP1+3)
+; 	ld e, a
+; 	push hl
+; 	; check if input will overflow
+; 	ld hl, 10000000
+; 	sbc hl, de
+; 	pop hl
+; 	ld a, 7
+; 	jr z, .set
+; 	jp p, .exit
+; .set:
+; 	inc a
+; .exit:
+; 	ld de, $000000
+; 	ret
 
-Draw32_patch2:
-	ld a, c
-	cp a, 8
-	jr nz, .exit
-	inc hl
-	inc hl
-	push de
-	ld de, (hl)
-	ld a, '.'
-	ld (hl), a
-	inc hl
-	ld (hl), e
-	inc hl
-	ld (hl), d
-	inc hl
-	ld a, 'M'
-	ld (hl), a
-	inc hl
-	xor a
-	ld (hl), a
-	pop de
-.exit:
-	ld hl, ti.OP3
-	ret
+; Draw32_patch2:
+; 	ld a, c
+; 	cp a, 8
+; 	jr nz, .exit
+; 	inc hl
+; 	inc hl
+; 	push de
+; 	ld de, (hl)
+; 	ld a, '.'
+; 	ld (hl), a
+; 	inc hl
+; 	ld (hl), e
+; 	inc hl
+; 	ld (hl), d
+; 	inc hl
+; 	ld a, 'M'
+; 	ld (hl), a
+; 	inc hl
+; 	xor a
+; 	ld (hl), a
+; 	pop de
+; .exit:
+; 	ld hl, ti.OP3
+; 	ret
 
 entry_point:
 jp boot_code_hook

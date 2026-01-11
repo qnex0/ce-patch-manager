@@ -1,7 +1,7 @@
 # Intro
 <img width="500" height="330" alt="image" src="https://github.com/user-attachments/assets/accb0d77-10de-448e-982b-51c8a3e38777" />
 
-The patch manager is a simple pre-boot environment that provides a central interface for managing and persisting ROM patches on the eZ80 series of TI calculators (that use a serial flash chip). The manager can be accessed by holding the `Alpha` key and pressing the reset button on the back of the device. Although applicable for applying general purpose patches, it was designed to apply patches related to the expansion of the TI-OS archive after upgrading the flash chip. It can increase the size of the archive from the original (approx 3.5MB) up to 11.5MB.
+The patch manager is a simple pre-boot environment that provides a central interface for managing and persisting ROM patches on the eZ80 series of TI calculators (that use a serial flash chip). The manager can be accessed by holding the `Alpha` key and pressing the reset button on the back of the device. Although applicable for applying general purpose patches, it was designed to apply patches related to the expansion of the TI-OS archive after upgrading the flash chip. It can increase the size of the archive from the original (approx 3.5MB) up to 7.5MB.
 
 # Photo
 <img width="2411" height="1193" alt="image" src="https://github.com/user-attachments/assets/928f323f-4969-43f5-a593-d7decf173aa7" />
@@ -35,7 +35,6 @@ The patch manager:
 - Modifies the boot/OS erase code to erase the expanded sectors.
 - Relocates the app region to the bottom of the extended flash.
 - Restricts apps from growing into [sectors 3B-3F](#sectors-3b-3f) by moving the top of the app region to sector 40.
-- Fixes the `Draw32` routine to continue to the millions unit instead of overflowing to 0 after 9999K so the archive size can be displayed properly.
 
 Other stuff:
 - Disables OS signature checking in order to boot a patched OS.
@@ -43,7 +42,7 @@ Other stuff:
 
 <details>
 <summary><strong id="flash-address-mask">Flash address mask</strong></summary>
-The CE ASIC supports mapping up to 12MB of flash. By default, only addresses 000000 to 3FFFFF are mapped (4MB). There is 8MB of unmapped memory 400000-BFFFFF. The 32-bit flash address mask defines the amount of flash to map. By default, it is set to map ~(FFC00000) = 3FFFFF. The manager changes this mask depending on the amount flash we want to map.
+The CE ASIC supports mapping up to 8MB of flash. By default, only addresses 000000 to 3FFFFF are mapped (4MB). There is 4MB of unmapped memory 400000-7FFFFF. The 32-bit flash address mask defines the amount of flash to map. By default, it is set to map ~(FFC00000) = 3FFFFF. The manager changes this mask depending on the amount flash we want to map.
 </details>
 
 <details>
@@ -84,9 +83,7 @@ KhiCAS is the largest app that you can install on the CE, taking up about 100% o
     return 1;
 ```
 
-There seems to be an issue with KhiCAS currently where variable evaluation fails when the 12MB archive patch is applied for some strange reason.
-
 # TODO
 Temporary locking of the boot sectors? I didn't add this functionality in the first release.
 
-The form factor of these serial flash chips can support capacities of up to 32 MB, yet only 12 MB can be mapped at a time, leaving 20 MB unused. It would be nice to have the option to back up the archive/OS into non mappable regions of the flash chip and swap them out when needed. Maybe there are even some secret ports that would allow you to change the base memory mapping address so the swapping process wouldn't be so slow.
+The form factor of these serial flash chips can support capacities of up to 32 MB, yet only 8 MB can be mapped at a time, leaving 24 MB unused. It would be nice to have the option to back up the archive/OS into non mappable regions of the flash chip and swap them out when needed. Maybe there are even some secret ports that would allow you to change the base memory mapping address so the swapping process wouldn't be so slow.
