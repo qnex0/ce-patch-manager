@@ -23,7 +23,7 @@ void *match_mem(void *haystack, size_t haystack_len, void *needle, size_t needle
     if (needle == NULL) return NULL;
     if (needle_len == 0) return NULL;
 
-    for (const char *h = haystack; haystack_len >= needle_len; ++h, --haystack_len) {
+    for (char *h = haystack; haystack_len >= needle_len; ++h, --haystack_len) {
         if (!memcmp(h, needle, needle_len)) {
             return h;
         }
