@@ -4,7 +4,7 @@ include 'inc/ti84pceg.inc'
 
 name := 'UPDATE'
 header := 'UPD'
-version := '1.0'
+version := '1.2'
 
 format ti archived executable appvar name
 
@@ -946,10 +946,16 @@ PrevFlashPage_patch:
 	ret
 
 ArcChk_patch:
+	push af
+	call ti.SetAToHLU
 	ld hl, 0
+	cp a, $40
+	jp p, .end
 	repeat 5
 	dec b
 	end repeat
+.end:
+	pop af
 	ret
 
 LoadDEIndFlash_patch:
@@ -1017,12 +1023,11 @@ Draw32_patch:
 	push hl
 	; check if input will overflow
 	ld hl, 10000000
+	or a
 	sbc hl, de
 	pop hl
 	ld a, 7
-	jr z, .set
-	jp p, .exit
-.set:
+	jr nc, .exit
 	inc a
 .exit:
 	ld de, $000000
