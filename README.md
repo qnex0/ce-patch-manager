@@ -1,7 +1,7 @@
 # Intro
 <img width="500" height="330" alt="image" src="https://github.com/user-attachments/assets/accb0d77-10de-448e-982b-51c8a3e38777" />
 
-The patch manager is a simple pre-boot environment that provides a central interface for managing and persisting ROM patches on the eZ80 series of TI calculators (that use a serial flash chip). The manager can be accessed by holding the `Alpha` key and pressing the reset button on the back of the device. Although applicable for applying general purpose patches, it was designed to apply patches related to the expansion of the TI-OS archive after upgrading the flash chip. It can increase the size of the archive from the original (approx 3.5MB) up to 11.5MB.
+The patch manager is a simple pre-boot environment that provides a central interface for managing and persisting ROM patches on the eZ80 series of TI calculators (that use a serial flash chip). The manager can be accessed by holding the `Alpha` key and pressing the reset button on the back of the device. Although applicable for applying general purpose patches, it was designed to apply patches related to the expansion of the TI-OS archive after upgrading the flash chip. It can increase the size of the archive from the original (approx 3MB) up to 11.4MB.
 
 # Photo
 <img width="2411" height="1193" alt="image" src="https://github.com/user-attachments/assets/928f323f-4969-43f5-a593-d7decf173aa7" />

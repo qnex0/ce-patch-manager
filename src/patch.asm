@@ -137,7 +137,7 @@ patches_start:
 entries
 	entry
 		; expand flash memory mapping mask
-		replace 2, [$21, $00, $C0, $FF] [$80] [$40]
+		replace 2, [$21, $00, $C0, $FF] [$80] [$00]
 		; expand boot code erase flash region
 		replace 1, [$06, $3E] [$80] [$C0]
 		from jump, $00004
@@ -925,10 +925,10 @@ NextFlashPage_patch:
 	; skip to the expanded archive sectors
 	add a, 5
 .next:
-	ld c, a
-	ld a, (patched_size_byte)
-	cp a, c
-	ld a, c
+	push hl
+	ld hl, patched_size_byte
+	cp a, (hl)
+	pop hl
 	jr nz, .end
 	dec a
 .end:
