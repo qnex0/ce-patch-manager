@@ -1,8 +1,10 @@
 # Intro
 <img width="500" height="330" alt="image" src="https://github.com/user-attachments/assets/accb0d77-10de-448e-982b-51c8a3e38777" />
 
+The patch manager is a simple pre-boot environment that provides a central interface for managing and persisting ROM patches on the eZ80 series of TI calculators (that use a serial flash chip). The manager can be accessed by holding the `Alpha` key and pressing the reset button on the back of the device. Although applicable for applying general purpose patches, it was designed to apply patches related to the expansion of the TI-OS archive after upgrading the flash chip. It can increase the size of the archive from the original (approx 3.5MB) up to 11.5MB.
 
-The patch manager is a simple pre-boot environment that provides a central interface for managing and persisting ROM patches on the eZ80 series of TI calculators (that use a serial flash chip). The manager can be accessed by holding the `Alpha` key during a reset. Although applicable for applying general purpose patches, it was designed to apply patches related to the expansion of the TI-OS archive after upgrading the flash chip. It can increase the size of the archive from the original (approx 3.5MB) up to 11.5MB.
+# Photo
+<img width="2411" height="1193" alt="image" src="https://github.com/user-attachments/assets/928f323f-4969-43f5-a593-d7decf173aa7" />
 
 # How to install
 Installing the patch manager requires that you replace the flash chip of your calculator. It assumes that you have access to the proper tools to program the new chip. The initial install of the patch manager requires you to use an external programmer to flash a patched ROM in order to circumvent the flash write protections. After the initial install, see [upgrades](#upgrades).
@@ -10,9 +12,6 @@ Installing the patch manager requires that you replace the flash chip of your ca
 To install the patch manager, you must retrieve a ROM dump of your calculator. You can do this directly from the calculator by running an assembly program to produce a rom dump (e.g the one from CEmu) or by physically dumping the memory using your flash programmer.
 
 The ROM should be a total of 4MB in size when dumped. Grab the installer from the release page ([or build it yourself](#building)), then run the executable from a command line, passing the path of the ROM file as the input. A new file with a _PATCHED suffix will be created if successful. This is what you need to flash to the new flash chip.
-
-# How to enter
-By default, the patch manager takes extra precautions when dealing with boot sectors. It applies a temporary lock to them that can only be cleared by a power cycle. You must hold the reset button for 4+ seconds (ensure that you are not connected to a power source), then hold `Alpha` and press `On`. If you explicitly disabled boot sector locking when [building](#building) the patch manager you can simply hold `Alpha` and short press the reset button.
 
 # Persistence
 <img width="405" height="397" alt="image" src="https://github.com/user-attachments/assets/3fe1030a-383e-469e-b1ba-4325b6deaf8e" />
@@ -23,9 +22,6 @@ The patch manager installs a hook that is invoked every time an OS is installed 
 The patch manager is designed for easy upgradeability in mind. Every release contains the initial installer executable along with an `UPDATE.8xv`. Send the `UPDATE.8xv` to your calculator and enter the patch manager to apply the update. This eliminates the need to physically reflash your flash chip.
 
 You may also remove the patches at any time (while keeping the patch manager installed).
-
-# KhiCAS
-KhiCAS is the largest app on the, taking up about 100% of the original archive space. Because of this, clever hacks were used in order to even fit the program (such as stripping the relocation table.) This means that the custom app installer that KhiCAS uses will NOT work with this, since it's designed to unload at a hardcoded location without a relocation table. To use KhiCAS, you need to generatge 
 
 # How it works
 The patch manager:
@@ -76,10 +72,21 @@ These routines are used by the archive code to increment / decrement the current
 # Building
 Simply run `make` in the base directory. A `ce-rom-patcher` executable and an `UPDATE.8xv` will be generated.
 
-If you prefer to keep the boot code unlocked, run `make LOCK_BOOT=0` instead.
- 
+~~If you prefer to keep the boot code unlocked, run `make LOCK_BOOT=0` instead.~~
+
 # Disclaimer
-Although during my testing I have encountered no issues, there is always the rare possibility that an accident occurs and requires you to reflash the chip for the device to become usable again. The program tries to take great care of the boot sectors by write locking them outside the patch manager to reduce the chances of corruption. The most important thing is to ensure that the device doesn't lose power during the patching process (and especially not when it's writing sectors 00 and 01).
+Although during my testing I have encountered no issues, there is always the rare possibility that an accident occurs and requires you to reflash the chip for the device to become usable again. The most important thing is to ensure that the device doesn't lose power during the patching process (and especially not when it's writing sectors 00 and 01).
+
+# KhiCAS
+KhiCAS is the largest app that you can install on the CE, taking up about 100% of the original archive space. Although 3rd party installers do work, KhiCAS uses a modified installer that is designed to install itself at a specific location. Because of this, the KhiCAS installer will NOT work and have unintended side effects if you try to use it. As a workaround, you can create a native OS app installer (8ek) by building [KhiCAS](https://github.com/KhiCAS/ti-ce) yourself using `make app`. Make sure to remove the following lines of the KhiCAS [`src/main.cc`](https://github.com/KhiCAS/ti-ce/blob/main/src/main.cc) file:
+```c
+  if (pcmain<appstart || pcmain>=0x3b0000)
+    return 1;
+```
+
+There seems to be an issue with KhiCAS currently where variable evaluation fails when the 12MB archive patch is applied for some strange reason.
 
 # TODO
+Temporary locking of the boot sectors? I didn't add this functionality in the first release.
+
 The form factor of these serial flash chips can support capacities of up to 32 MB, yet only 12 MB can be mapped at a time, leaving 20 MB unused. It would be nice to have the option to back up the archive/OS into non mappable regions of the flash chip and swap them out when needed. Maybe there are even some secret ports that would allow you to change the base memory mapping address so the swapping process wouldn't be so slow.
