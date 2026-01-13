@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <unistd.h>
 
 #define KeypadScan 0x0003D0
 
@@ -15,6 +16,8 @@ struct ti_rom_t {
 static const char bin[] = {
     #embed "UPDATE.bin"
 };
+
+static uint16_t new_size = 0x40;
 
 void *match_mem(void *haystack, size_t haystack_len, void *needle, size_t needle_len)
 {
@@ -48,7 +51,7 @@ static bool load_rom(const char *path, struct ti_rom_t *rom)
         return false;
     }
 
-    int ret = false;
+    bool ret = false;
 
     if (file_size(f) != 0x400000) {
         fprintf(stderr, "incorrect ROM size\n");
@@ -89,7 +92,7 @@ static bool write_rom(const char *path, struct ti_rom_t *rom)
         return false;
     }
 
-    int ret = false;
+    bool ret = false;
 
     if (fwrite(rom->boot_code, sizeof(rom->boot_code), 1, f) != 1) {
         fprintf(stderr, "failed to write boot code\n");
@@ -104,7 +107,7 @@ static bool write_rom(const char *path, struct ti_rom_t *rom)
     // fill remainder with FF
     static uint8_t block[0x10000];
     memset(block, 0xFF, sizeof(block));
-    for (int i = 0x0C; i < 0x40; i++) {
+    for (uint16_t i = 0x0C; i < new_size; i++) {
         if (fwrite(block, sizeof(block), 1, f) != 1) {
             fprintf(stderr, "failed to write block\n");
             goto cleanup;
@@ -129,13 +132,38 @@ cleanup:
 
 int main(int argc, char *argv[])
 {
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <rom_file>\n", argv[0]);
+    char *input_rom_path = NULL;
+    int opt;
+    while ((opt = getopt(argc, argv, "p:")) != -1) {
+        switch (opt) {
+        case 'p':
+            if (new_size != 0x40) {
+                fprintf(stderr, "padding already specified\n");
+                return EXIT_FAILURE;
+            }
+            new_size = atoi(optarg) << 4;
+            if (new_size != 0x80 && new_size != 0x100 && new_size != 0x200) {
+                fprintf(stderr, "invalid padding. pass either 8, 16 or 32\n");
+                return EXIT_FAILURE;
+            }
+            break;
+        default:
+            return EXIT_FAILURE;
+        }
+    }
+
+    if (optind == argc) {
+        fprintf(stderr, "usage: %s [-p N] <rom_file>\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    input_rom_path = argv[optind++];
+    if (optind < argc) {
+        fprintf(stderr, "too many arguments\n");
         return EXIT_FAILURE;
     }
 
     static struct ti_rom_t rom;
-    char *input_rom_path = argv[1];
     if (!load_rom(input_rom_path, &rom)) return EXIT_FAILURE;
 
     uint8_t *jp_instr = &rom.boot_code[KeypadScan];
